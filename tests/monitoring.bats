@@ -22,6 +22,16 @@ UTILS_PATH="$SRC_DIR/modules/utils.sh"
 # Set up test environment
 setup() {
   mkdir -p "$TEST_TEMP_DIR"
+  mkdir -p "$TEST_TEMP_DIR/sys/class/power_supply/BAT0"
+  mkdir -p "$TEST_TEMP_DIR/xdg_config_home/battery-guardian"
+  mkdir -p "$TEST_TEMP_DIR/xdg_state_home/battery-guardian/logs"
+  mkdir -p "$TEST_TEMP_DIR/xdg_runtime_dir/battery-guardian"
+
+  # Set XDG environment variables to point to test directories
+  export XDG_CONFIG_HOME="$TEST_TEMP_DIR/xdg_config_home"
+  export XDG_STATE_HOME="$TEST_TEMP_DIR/xdg_state_home"
+  export XDG_RUNTIME_DIR="$TEST_TEMP_DIR/xdg_runtime_dir"
+  
   # Create test environment variables
   export BG_SCRIPT_DIR="$SRC_DIR"
   export BG_PARENT_DIR="$REPO_ROOT"
@@ -35,6 +45,7 @@ setup() {
   # Source necessary modules for testing
   source "$SRC_DIR/modules/log.sh"
   source "$SRC_DIR/modules/utils.sh"
+  source "$SRC_DIR/modules/battery.sh"
 
   # Initialize back-off variables
   bg_current_backoff_interval=${bg_BACKOFF_INITIAL}
@@ -45,7 +56,9 @@ teardown() {
   if [ -d "$TEST_TEMP_DIR" ]; then
     rm -rf "$TEST_TEMP_DIR"
   fi
-}  # Test the bg_get_sleep_duration function with adaptive back-off
+}
+
+# Test the bg_get_sleep_duration function with adaptive back-off
 @test "bg_get_sleep_duration implements adaptive back-off correctly" {
   # Mock bg_info function to avoid output
   function bg_info() { :; }
