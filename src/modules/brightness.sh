@@ -48,6 +48,66 @@ if [[ -z "${bg_BRIGHTNESS_CONTROL_ENABLED:-}" ]]; then
 fi
 
 # ---- Brightness Control Functions ----
+bg_get_brightness() {
+  local brightness=0
+  
+  # Try using brightnessctl first
+  if bg_check_command_exists brightnessctl; then
+    brightness=$(brightnessctl -m -p get | tr -d '%')
+    return 0
+  fi
+  
+  # Try light command next
+  if bg_check_command_exists light; then
+    brightness=$(light -G | tr -d '.')
+    return 0
+  fi
+  
+  # Try xbacklight next
+  if bg_check_command_exists xbacklight; then
+    brightness=$(xbacklight -get | awk '{print int($1)}')
+    return 0
+  fi
+  
+  # If all else fails, try sysfs
+  if [[ -n "${bg_BACKLIGHT_PATH:-}" ]]; then
+    local current_brightness
+    local max_brightness
+    
+    current_brightness=$(cat "$bg_BACKLIGHT_PATH/brightness")
+    max_brightness=$(cat "$bg_BACKLIGHT_PATH/max_brightness")
+    
+    brightness=$(bg_calculate_brightness_percentage "$current_brightness" "$max_brightness")
+  else
+    # Try to find a backlight device
+    local backlight_dir="/sys/class/backlight"
+    if [[ -d "$backlight_dir" ]]; then
+      # Get the first backlight device
+      local device
+      device=$(find "$backlight_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+      
+      if [[ -n "$device" ]]; then
+        bg_BACKLIGHT_PATH="$device"
+        current_brightness=$(cat "$device/brightness")
+        max_brightness=$(cat "$device/max_brightness")
+        
+        brightness=$(bg_calculate_brightness_percentage "$current_brightness" "$max_brightness")
+      fi
+    fi
+  fi
+  
+  echo "$brightness"
+}
+
+# Calculate brightness percentage
+bg_calculate_brightness_percentage() {
+  local current="$1"
+  local max="$2"
+  
+  echo $(( (current * 100) / max ))
+}
+
+# Legacy function name for compatibility
 bg_get_current_brightness() {
   local brightness=100
   local success=false
@@ -142,79 +202,95 @@ bg_get_current_brightness() {
   echo "$brightness" # Return default value
 }
 
+# Set brightness to a specific percentage
 bg_set_brightness() {
-  local brightness_percent=$1
-  local success=false
-
-  # Validate input and enforce safety limits (never below 5%)
-  if [[ ! "$brightness_percent" =~ ^[0-9]+$ ]] || [ "$brightness_percent" -lt 5 ] || [ "$brightness_percent" -gt 100 ]; then
-    bg_warn "Invalid brightness value ($brightness_percent). Using 20% as safety default."
-    brightness_percent=20
-  fi
-
-  bg_info "Setting brightness to $brightness_percent%"
-
-  # Try using brightnessctl if available
-  if bg_check_command_exists "brightnessctl"; then
-    brightnessctl s "$brightness_percent%" -q 2>/dev/null
-    if [[ $? -eq 0 ]]; then
-      bg_info "Successfully set brightness to $brightness_percent% using brightnessctl"
-      success=true
-      return 0
-    fi
-    bg_warn "Failed to set brightness using brightnessctl."
-  fi
-
-  # Try using light if available
-  if bg_check_command_exists "light"; then
-    light -S "$brightness_percent" 2>/dev/null
-    if [[ $? -eq 0 ]]; then
-      bg_info "Successfully set brightness to $brightness_percent% using light"
-      success=true
-      return 0
-    fi
-    bg_warn "Failed to set brightness using light."
-  fi
-
-  # Try using xbacklight if available (X11 only)
-  if bg_check_command_exists "xbacklight"; then
-    xbacklight -set "$brightness_percent" 2>/dev/null
-    if [[ $? -eq 0 ]]; then
-      bg_info "Successfully set brightness to $brightness_percent% using xbacklight"
-      success=true
-      return 0
-    fi
-    bg_warn "Failed to set brightness using xbacklight."
-  fi
-
-  # Last resort: try to use direct sysfs method if we find a compatible backlight device
-  for backlight_dir in /sys/class/backlight/*; do
-    if [[ -d "$backlight_dir" && -f "$backlight_dir/brightness" && -f "$backlight_dir/max_brightness" && -w "$backlight_dir/brightness" ]]; then
-      local max
-      max=$(cat "$backlight_dir/max_brightness" 2>/dev/null)
-
-      if [[ $? -eq 0 && -n "$max" && "$max" =~ ^[0-9]+$ && "$max" -gt 0 ]]; then
-        # Calculate the raw brightness value based on percentage
-        local raw_value
-        raw_value=$(echo "$max * $brightness_percent / 100" | bc 2>/dev/null)
-
-        if [[ $? -eq 0 && -n "$raw_value" ]]; then
-          # Try to set the brightness directly (might require root privileges)
-          echo "$raw_value" >"$backlight_dir/brightness" 2>/dev/null
-          if [[ $? -eq 0 ]]; then
-            bg_info "Successfully set brightness to $brightness_percent% using sysfs ($backlight_dir)"
-            success=true
-            return 0
-          fi
-        fi
-      fi
-    fi
-  done
-
-  if ! $success; then
-    bg_error "Failed to set brightness using any available method."
+  local target_brightness="$1"
+  
+  # Validate input
+  if [[ ! "$target_brightness" =~ ^[0-9]+$ ]] || [ "$target_brightness" -lt 0 ] || [ "$target_brightness" -gt 100 ]; then
+    bg_error "Invalid brightness value: $target_brightness (should be 0-100)"
     return 1
   fi
+  
+  bg_debug "Setting brightness to $target_brightness%"
+  
+  # Try using brightnessctl first
+  if bg_check_command_exists brightnessctl; then
+    brightnessctl s "$target_brightness%" -q
+    return $?
+  fi
+  
+  # Try light command next
+  if bg_check_command_exists light; then
+    light -S "$target_brightness"
+    return $?
+  fi
+  
+  # Try xbacklight next
+  if bg_check_command_exists xbacklight; then
+    xbacklight -set "$target_brightness"
+    return $?
+  fi
+  
+  # If all else fails, try sysfs if available
+  if [[ -n "${bg_BACKLIGHT_PATH:-}" ]]; then
+    if [[ -f "$bg_BACKLIGHT_PATH/brightness" && -f "$bg_BACKLIGHT_PATH/max_brightness" ]]; then
+      local max_brightness
+      max_brightness=$(cat "$bg_BACKLIGHT_PATH/max_brightness")
+      
+      # Calculate raw brightness value
+      local raw_brightness
+      raw_brightness=$(( (target_brightness * max_brightness) / 100 ))
+      
+      # Check if we have write permission
+      if [[ -w "$bg_BACKLIGHT_PATH/brightness" ]]; then
+        echo "$raw_brightness" > "$bg_BACKLIGHT_PATH/brightness"
+        return $?
+      else
+        bg_error "No write permission for $bg_BACKLIGHT_PATH/brightness"
+        return 1
+      fi
+    fi
+  fi
+  
+  bg_error "No supported brightness control method available"
+  return 1
+}
+
+# Auto-adjust brightness based on power source
+bg_auto_brightness() {
+  # Check if auto-brightness is enabled
+  if [[ "${bg_AUTO_BRIGHTNESS_ENABLED:-0}" -ne 1 ]]; then
+    bg_debug "Auto brightness adjustment is disabled"
+    return 0
+  fi
+  
+  # Get AC status
+  local ac_status
+  ac_status=$(bg_check_ac_status)
+  
+  # Get current brightness
+  local current_brightness
+  current_brightness=$(bg_get_brightness)
+  
+  # Set target brightness based on power source
+  local target_brightness
+  if [[ "$ac_status" == "Charging" ]]; then
+    target_brightness="${bg_AUTO_BRIGHTNESS_AC:-100}"
+    bg_debug "On AC power, setting brightness to $target_brightness%"
+  else
+    target_brightness="${bg_AUTO_BRIGHTNESS_BATTERY:-50}"
+    bg_debug "On battery, setting brightness to $target_brightness%"
+  fi
+  
+  # Only change brightness if it's significantly different from current
+  if [[ $((current_brightness - target_brightness)) -ge 5 ]] || [[ $((target_brightness - current_brightness)) -ge 5 ]]; then
+    bg_set_brightness "$target_brightness"
+  else
+    bg_debug "Current brightness ($current_brightness%) is close to target ($target_brightness%), skipping adjustment"
+  fi
+  
+  return 0
 }
 
 bg_adjust_brightness_for_battery() {

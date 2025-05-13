@@ -169,6 +169,20 @@ bg_check_ac_status() {
   echo "$status" # Return default value
 }
 
+# Check if the battery is currently charging
+bg_is_battery_charging() {
+  local status
+  status=$(bg_check_ac_status)
+  
+  if [[ "$status" == "Charging" ]]; then
+    echo "1"
+    return 0
+  else
+    echo "0"
+    return 0
+  fi
+}
+
 # ---- Battery Detection Function ----
 bg_check_battery_exists() {
   bg_info "Checking for battery presence..."
@@ -184,7 +198,8 @@ bg_check_battery_exists() {
   # Try alternate battery paths (some systems use different naming)
   for alt_bat in /sys/class/power_supply/*; do
     if [[ -d "$alt_bat" && -f "$alt_bat/capacity" && -f "$alt_bat/type" ]]; then
-      local type=$(cat "$alt_bat/type" 2>/dev/null)
+      local type
+      type=$(cat "$alt_bat/type" 2>/dev/null)
       if [[ "$type" == "Battery" ]]; then
         bg_info "Battery found at $alt_bat"
         return 0

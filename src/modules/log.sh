@@ -91,7 +91,8 @@ bg_rotate_logs() {
   fi
 
   # If log file is smaller than max size, no rotation needed
-  if [[ "$log_size" -lt "$BG_MAX_LOG_SIZE" ]]; then
+  # Use variable from environment if set, otherwise use default
+  if [[ "$log_size" -lt "${BG_MAX_LOG_SIZE:-1048576}" ]]; then
     return 0
   fi
 
@@ -141,6 +142,25 @@ bg_rotate_logs() {
 bg_log() {
   local level="$1"
   local message="$2"
+  local level_num=0
+  
+  # Set default log level to INFO (3) if not specified
+  local log_level=${BG_LOG_LEVEL:-3}
+  
+  # Convert log level string to number
+  case "$level" in
+    "DEBUG")   level_num=4 ;;
+    "INFO")    level_num=3 ;;
+    "WARNING") level_num=2 ;;
+    "ERROR")   level_num=1 ;;
+    *)         level_num=3 ;; # Default to INFO level
+  esac
+  
+  # Only log if the message's level is less than or equal to the configured level
+  if [[ "$level_num" -gt "$log_level" ]]; then
+    return 0
+  fi
+  
   local datetime
   datetime=$(date +'%Y-%m-%d %H:%M:%S')
 
@@ -153,8 +173,14 @@ bg_log() {
   # Rotate logs if necessary before writing
   bg_rotate_logs
 
-  # Write log entry
-  echo "[$datetime] [$level] $message" >>"$BG_LOG_FILE"
+  # Write log entry to a new file if rotation happened
+  if [[ ! -f "$BG_LOG_FILE" ]]; then
+    # After rotation, the file may not exist, so create it with the new entry
+    echo "[$datetime] [$level] $message" >"$BG_LOG_FILE"
+  else
+    # Append to existing file
+    echo "[$datetime] [$level] $message" >>"$BG_LOG_FILE"
+  fi
 
   # For error and warning levels, also print to stderr
   if [[ "$level" == "ERROR" || "$level" == "WARNING" ]]; then

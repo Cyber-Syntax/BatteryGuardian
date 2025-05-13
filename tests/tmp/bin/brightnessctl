@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "brightnessctl called with: $@"
+exit 0

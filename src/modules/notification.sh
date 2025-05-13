@@ -44,11 +44,92 @@ if [[ -z "${bg_CRITICAL_THRESHOLD:-}" || -z "${bg_LOW_THRESHOLD:-}" || -z "${bg_
   fi
 fi
 
+# Add throttling functions
+bg_should_throttle() {
+  local notification_type="$1"
+  local throttle_dir
+  
+  # Set up directories for timestamp files
+  XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+  throttle_dir="${XDG_STATE_HOME}/battery-guardian/notifications"
+  
+  # Create directory if it doesn't exist
+  mkdir -p "$throttle_dir" 2>/dev/null
+  
+  local timestamp_file="$throttle_dir/${notification_type}_timestamp"
+  
+  # If timestamp file doesn't exist, no throttling needed
+  if [[ ! -f "$timestamp_file" ]]; then
+    return 0 # Not throttled
+  fi
+  
+  # Read the last notification timestamp
+  local last_timestamp
+  last_timestamp=$(cat "$timestamp_file" 2>/dev/null)
+  if [[ ! "$last_timestamp" =~ ^[0-9]+$ ]]; then
+    # Invalid timestamp, allow notification
+    return 0
+  fi
+  
+  # Get current time
+  local current_time
+  current_time=$(date +%s)
+  
+  # Calculate time difference
+  local time_diff=$((current_time - last_timestamp))
+  
+  # If time difference is less than cooldown, throttle notification
+  if [[ "$time_diff" -lt "${bg_NOTIFICATION_COOLDOWN:-300}" ]]; then
+    return 1 # Throttled
+  fi
+  
+  return 0 # Not throttled
+}
+
+bg_update_throttle_timestamp() {
+  local notification_type="$1"
+  local throttle_dir
+  
+  # Set up directories for timestamp files
+  XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+  throttle_dir="${XDG_STATE_HOME}/battery-guardian/notifications"
+  
+  # Create directory if it doesn't exist
+  mkdir -p "$throttle_dir" 2>/dev/null
+  
+  local timestamp_file="$throttle_dir/${notification_type}_timestamp"
+  
+  # Update timestamp
+  date +%s >"$timestamp_file" 2>/dev/null
+}
+
+# Ensure BG_NOTIFICATION_FILE is defined
+XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+BG_NOTIFICATION_FILE="${XDG_RUNTIME_DIR}/battery-guardian/last_notification.txt"
+mkdir -p "$(dirname "$BG_NOTIFICATION_FILE")" 2>/dev/null
+
 # ---- Notification Functions ----
 bg_send_notification() {
   local title="$1"
   local message="$2"
   local urgency="${3:-normal}"
+  local notification_type="${4:-general}"
+  
+  # Check if notifications are disabled
+  if [[ "${BG_ENABLE_NOTIFICATIONS:-1}" == "0" ]]; then
+    bg_debug "Notifications are disabled. Skipping: '$title' - '$message'"
+    return 0
+  fi
+  
+  # Check for notification cooldown if type is specified
+  if [[ -n "$notification_type" ]]; then
+    if ! bg_should_throttle "$notification_type"; then
+      bg_debug "Notification throttled: '$title' ($notification_type) - within cooldown period"
+      return 0
+    fi
+    # Update timestamp for this notification type
+    bg_update_throttle_timestamp "$notification_type"
+  fi
 
   if ! bg_check_command_exists "notify-send"; then
     bg_error "notify-send not found. Cannot send notification: '$title' - '$message'"
@@ -111,15 +192,15 @@ bg_send_battery_notification() {
   if [ "$battery_percent" -le "$bg_CRITICAL_THRESHOLD" ]; then
     notification_type="critical"
     bg_info "Battery is critically low at $battery_percent%. Sending critical notification."
-    bg_send_notification "Battery Warning" "Battery is at $battery_percent%. Please plug in the charger." "critical"
+    bg_send_notification "Critical Battery" "Battery is at $battery_percent%. Please plug in the charger." "critical" "battery_critical"
   elif [ "$battery_percent" -le "$bg_LOW_THRESHOLD" ]; then
     notification_type="low"
     bg_info "Battery is low at $battery_percent%. Sending low notification."
-    bg_send_notification "Battery Warning" "Battery is at $battery_percent%. Consider plugging in the charger." "normal"
+    bg_send_notification "Low Battery" "Battery is at $battery_percent%. Consider plugging in the charger." "normal" "battery_low"
   elif [ "$battery_percent" -ge "$bg_FULL_BATTERY_THRESHOLD" ] && [ "$ac_status" == "Charging" ]; then
     notification_type="full"
     bg_info "Battery is fully charged at $battery_percent%. Sending notification."
-    bg_send_notification "Battery Info" "Battery is fully charged ($battery_percent%)." "normal"
+    bg_send_notification "Battery Full" "Battery is fully charged ($battery_percent%)." "normal" "battery_full"
   else
     return 0 # No notification needed
   fi

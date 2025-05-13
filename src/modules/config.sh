@@ -171,12 +171,25 @@ trap bg_cleanup SIGINT SIGTERM EXIT
 # Load and validate configuration
 bg_load_config() {
   # Start with default values
-  if [[ -f "$BG_DEFAULT_CONFIG" ]]; then
+  if [[ -n "${BG_DEFAULT_CONFIG:-}" && -f "$BG_DEFAULT_CONFIG" ]]; then
     bg_info "Loading default configuration from $BG_DEFAULT_CONFIG"
     # shellcheck source=/dev/null
     source "$BG_DEFAULT_CONFIG"
   else
-    bg_error "Default configuration file not found at $BG_DEFAULT_CONFIG"
+    bg_error "Default configuration file not found at ${BG_DEFAULT_CONFIG:-[No default config path set]}"
+    # Set fallback default values for critical parameters
+    bg_CRITICAL_THRESHOLD=10
+    bg_LOW_THRESHOLD=20
+    bg_FULL_BATTERY_THRESHOLD=90
+    bg_BRIGHTNESS_MAX=100
+    bg_BRIGHTNESS_VERY_HIGH=95
+    bg_BRIGHTNESS_HIGH=85
+    bg_BRIGHTNESS_MEDIUM_HIGH=70
+    bg_BRIGHTNESS_MEDIUM=60
+    bg_BRIGHTNESS_MEDIUM_LOW=45
+    bg_BRIGHTNESS_LOW=35
+    bg_BRIGHTNESS_VERY_LOW=25
+    bg_BRIGHTNESS_CRITICAL=15
   fi
 
   # Ensure user configuration exists (create if necessary)
@@ -286,4 +299,98 @@ bg_validate_config() {
     bg_info "bg_BRIGHTNESS_MEDIUM_LOW=$bg_BRIGHTNESS_MEDIUM_LOW, bg_BRIGHTNESS_LOW=$bg_BRIGHTNESS_LOW"
     bg_info "bg_BRIGHTNESS_VERY_LOW=$bg_BRIGHTNESS_VERY_LOW, bg_BRIGHTNESS_CRITICAL=$bg_BRIGHTNESS_CRITICAL"
   fi
+}
+
+# Sanitize config values to ensure they're within valid ranges
+bg_sanitize_config() {
+  # Cap threshold percentages to valid ranges (0-100%)
+  
+  # Battery thresholds
+  if [[ -n "${bg_LOW_THRESHOLD:-}" ]]; then
+    if [[ "$bg_LOW_THRESHOLD" -lt 0 ]]; then
+      bg_LOW_THRESHOLD=0
+      bg_warn "Invalid bg_LOW_THRESHOLD value. Set to minimum: 0"
+    elif [[ "$bg_LOW_THRESHOLD" -gt 100 ]]; then
+      bg_LOW_THRESHOLD=100
+      bg_warn "Invalid bg_LOW_THRESHOLD value. Set to maximum: 100"
+    fi
+  fi
+  
+  if [[ -n "${bg_CRITICAL_THRESHOLD:-}" ]]; then
+    if [[ "$bg_CRITICAL_THRESHOLD" -lt 0 ]]; then
+      bg_CRITICAL_THRESHOLD=0
+      bg_warn "Invalid bg_CRITICAL_THRESHOLD value. Set to minimum: 0"
+    elif [[ "$bg_CRITICAL_THRESHOLD" -gt 100 ]]; then
+      bg_CRITICAL_THRESHOLD=100
+      bg_warn "Invalid bg_CRITICAL_THRESHOLD value. Set to maximum: 100"
+    fi
+  fi
+  
+  if [[ -n "${bg_FULL_BATTERY_THRESHOLD:-}" ]]; then
+    if [[ "$bg_FULL_BATTERY_THRESHOLD" -lt 0 ]]; then
+      bg_FULL_BATTERY_THRESHOLD=0
+      bg_warn "Invalid bg_FULL_BATTERY_THRESHOLD value. Set to minimum: 0"
+    elif [[ "$bg_FULL_BATTERY_THRESHOLD" -gt 100 ]]; then
+      bg_FULL_BATTERY_THRESHOLD=100
+      bg_warn "Invalid bg_FULL_BATTERY_THRESHOLD value. Set to maximum: 100"
+    fi
+  fi
+  
+  # Brightness values
+  if [[ -n "${bg_BRIGHTNESS_MAX:-}" ]]; then
+    if [[ "$bg_BRIGHTNESS_MAX" -lt 0 ]]; then
+      bg_BRIGHTNESS_MAX=0
+      bg_warn "Invalid bg_BRIGHTNESS_MAX value. Set to minimum: 0"
+    elif [[ "$bg_BRIGHTNESS_MAX" -gt 100 ]]; then
+      bg_BRIGHTNESS_MAX=100
+      bg_warn "Invalid bg_BRIGHTNESS_MAX value. Set to maximum: 100"
+    fi
+  fi
+  
+  # Time values should be positive
+  if [[ -n "${bg_NOTIFICATION_COOLDOWN:-}" ]]; then
+    if [[ "$bg_NOTIFICATION_COOLDOWN" -lt 0 ]]; then
+      bg_NOTIFICATION_COOLDOWN=0
+      bg_warn "Invalid bg_NOTIFICATION_COOLDOWN value. Set to minimum: 0"
+    fi
+  fi
+  
+  # Adaptive polling values should be positive
+  if [[ -n "${bg_BACKOFF_INITIAL:-}" ]]; then
+    if [[ "$bg_BACKOFF_INITIAL" -lt 1 ]]; then
+      bg_BACKOFF_INITIAL=1
+      bg_warn "Invalid bg_BACKOFF_INITIAL value. Set to minimum: 1"
+    fi
+  fi
+  
+  if [[ -n "${bg_CRITICAL_POLLING:-}" ]]; then
+    if [[ "$bg_CRITICAL_POLLING" -lt 1 ]]; then
+      bg_CRITICAL_POLLING=1
+      bg_warn "Invalid bg_CRITICAL_POLLING value. Set to minimum: 1"
+    fi
+  fi
+  
+  return 0
+}
+
+# Initialize configuration system and create default user config if needed
+bg_initialize_config() {
+  # Ensure XDG directories exist
+  mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}" 2>/dev/null || true
+  
+  # Ensure BG config directory exists
+  if ! mkdir -p "$BG_CONFIG_DIR" 2>/dev/null; then
+    bg_error "Failed to create configuration directory $BG_CONFIG_DIR"
+    return 1
+  fi
+  
+  # Create user config file if it doesn't exist
+  if [[ ! -f "$BG_USER_CONFIG" ]]; then
+    bg_ensure_user_config_exists
+  fi
+  
+  # Load configuration
+  bg_load_config
+  
+  return 0
 }
