@@ -73,91 +73,52 @@ bg_main() {
   local previous_ac_status="Unknown"
   local previous_battery_percent=0
 
-  # Main loop
+  # Export previous variables so they're accessible in the monitoring functions
+  export previous_battery_percent=$previous_battery_percent
+  export previous_ac_status=$previous_ac_status
+  
+  # Start event-based monitoring instead of using polling loop
+  bg_info "Starting event-based battery monitoring..."
+  start_monitoring
+  
+  # If start_monitoring somehow exits (should not happen), fall back to traditional loop
+  bg_warn "Event-based monitoring exited unexpectedly. Falling back to polling loop."
+  
+  # Main fallback loop with adaptive back-off
+  local prev_bat_percent=${previous_battery_percent:-0}
+  local prev_ac=${previous_ac_status:-"Unknown"}
+  local has_changed=1  # Start with 1 to force initial reset of back-off
+  
   while true; do
-    # Get the battery percentage with error checking
-    local battery_percent
-    battery_percent=$(bg_check_battery)
-    if [[ ! "$battery_percent" =~ ^[0-9]+$ ]]; then
-      bg_error "Invalid battery percentage: '$battery_percent'. Using previous value: $previous_battery_percent"
-      battery_percent=$previous_battery_percent
+    # Call the consolidated check function
+    check_battery_and_adjust_brightness
+    
+    # Detect if status has changed
+    if [[ "$prev_bat_percent" != "$previous_battery_percent" || "$prev_ac" != "$previous_ac_status" ]]; then
+      has_changed=1
+    else
+      has_changed=0
     fi
-
-    # Get AC status with error checking
-    local ac_status
-    ac_status=$(bg_check_ac_status)
-    if [[ "$ac_status" != "Charging" && "$ac_status" != "Discharging" ]]; then
-      bg_warn "Unrecognized AC status: '$ac_status'. Using previous value: $previous_ac_status"
-      ac_status=$previous_ac_status
-    fi
-
-    # Log current status (only if changed to reduce log size)
-    if [ "$battery_percent" != "$previous_battery_percent" ] || [ "$ac_status" != "$previous_ac_status" ]; then
-      bg_info "Battery: $battery_percent%, AC: $ac_status"
-    fi
-
-    # Handle AC connection state changes
-    if [ "$ac_status" == "Charging" ] && [ "$previous_ac_status" != "Charging" ]; then
-      bg_info "AC power connected."
-      bg_send_notification "Battery Info" "AC power connected." "normal"
-      # Set brightness to high when AC is connected
-      bg_set_brightness "$bg_BRIGHTNESS_HIGH"
-    elif [ "$ac_status" == "Discharging" ] && [ "$previous_ac_status" == "Charging" ]; then
-      bg_info "AC power disconnected."
-      bg_send_notification "Battery Info" "AC power disconnected." "normal"
-      # Adjust brightness immediately when switching to battery
-      bg_adjust_brightness_for_battery "$battery_percent" "$ac_status"
-    fi
-
-    # Check battery levels and issue notifications if needed
-    if bg_should_send_notification "$battery_percent" "$ac_status"; then
-      bg_send_battery_notification "$battery_percent" "$ac_status"
-    fi
-
-    # Take critical actions for extremely low battery
-    if [ "$battery_percent" -le 5 ] && [ "$ac_status" == "Discharging" ]; then
-      # Send emergency notification
-      bg_send_notification "CRITICAL BATTERY LEVEL" "Battery at $battery_percent%! System may shut down soon!" "critical"
-
-      # Log the critical state
-      bg_error "CRITICAL: Battery at $battery_percent%. Taking emergency actions."
-
-      # Optional: Trigger system actions (hibernation/suspension)
-      # Uncomment the appropriate line for your system if desired
-
-      # For systemd systems:
-      # if bg_check_command_exists "systemctl"; then
-      #   bg_info "Attempting to hibernate system due to critical battery level"
-      #   systemctl hibernate || systemctl suspend
-      # fi
-
-      # For non-systemd systems:
-      # if bg_check_command_exists "pm-hibernate"; then
-      #   bg_info "Attempting to hibernate system due to critical battery level"
-      #   pm-hibernate || pm-suspend
-      # fi
-    fi
-
-    # Adjust brightness based on battery percentage
-    bg_adjust_brightness_for_battery "$battery_percent" "$ac_status"
-
-    # Determine sleep duration based on battery status
+    
+    # Get sleep duration based on status and change detection
     local sleep_duration
-    sleep_duration=$(bg_get_sleep_duration "$battery_percent" "$ac_status")
+    sleep_duration=$(bg_get_sleep_duration "$previous_battery_percent" "$previous_ac_status" "$has_changed")
+    
     # Validate sleep duration
-    if [[ ! "$sleep_duration" =~ ^[0-9]+$ ]] || [ "$sleep_duration" -lt 30 ]; then
-      bg_warn "Invalid sleep duration: '$sleep_duration'. Using safe default of 60 seconds."
-      sleep_duration=60
+    if [[ ! "$sleep_duration" =~ ^[0-9]+$ ]] || [ "$sleep_duration" -lt 10 ]; then
+      bg_warn "Invalid sleep duration: '$sleep_duration'. Using safe default of 30 seconds."
+      sleep_duration=30
     fi
-
-    # Update previous values
-    previous_ac_status="$ac_status"
-    previous_battery_percent="$battery_percent"
+    
+    # Update previous values for next comparison
+    prev_bat_percent=$previous_battery_percent
+    prev_ac=$previous_ac_status
 
     # Sleep before checking again
-    bg_info "Sleeping for $sleep_duration seconds."
+    bg_info "Sleeping for ${sleep_duration}s (adaptive back-off)"
     sleep "$sleep_duration"
   done
+      
 }
 
 # Start the main function

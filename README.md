@@ -7,9 +7,11 @@ A comprehensive battery monitoring and management solution for Linux systems. Ba
 - **Battery Level Notifications**: Alerts for low, critical, and full battery levels
 - **Smart Brightness Control**: Automatically adjusts screen brightness based on battery level and charging status
 - **Multi-Environment Compatibility**: Works across different window managers (Hyprland, i3, Qtile, XFCE, etc.)
+- **Event-Based Monitoring**: Zero-latency reactions to power events using UPower, ACPI, or inotify
 - **Multiple Fallback Methods**: Uses various methods to detect battery status and control brightness
+- **Adaptive Polling**: Exponential back-off algorithm that minimizes CPU wakeups while staying responsive
 - **Customizable Thresholds**: Configure your own battery thresholds and brightness levels
-- **Resource Efficient**: Adaptive sleep intervals based on battery status
+- **Resource Efficient**: Prioritizes events over polling, resets back-off timers when actual changes occur
 - **Automatic Configuration**: Creates user-specific configuration files for easy customization
 - **Log Rotation**: Maintains log files with automatic rotation (3 files of max 1MB each)
 - **XDG Base Directory Support**: Properly uses XDG directories for configuration and logs

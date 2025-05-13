@@ -24,6 +24,13 @@ bg_BRIGHTNESS_LOW=35         # For battery >20%
 bg_BRIGHTNESS_VERY_LOW=25    # For battery >10%
 bg_BRIGHTNESS_CRITICAL=15    # For critical battery <=10%
 
+# Adaptive polling settings (in seconds)
+bg_BACKOFF_INITIAL=10        # Initial polling interval
+bg_BACKOFF_MAX=300           # Maximum polling interval (5 minutes)
+bg_BACKOFF_FACTOR=2          # Multiplier for each step (exponential growth)
+bg_CRITICAL_POLLING=30       # Always poll at least this often when battery critical (<= 5%)
+bg_DBUS_TEST_TIMEOUT=5       # Seconds to test dbus connection
+
 # Battery thresholds for brightness changes
 bg_BATTERY_VERY_HIGH_THRESHOLD=85 # Almost full battery
 bg_BATTERY_HIGH_THRESHOLD=70
