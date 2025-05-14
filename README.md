@@ -1,13 +1,13 @@
 # BatteryGuardian
 
-A comprehensive battery monitoring and management solution for Linux systems. BatteryGuardian is a robust bash script that actively monitors your laptop's battery status and takes intelligent actions to both inform users and extend battery life.
+A comprehensive battery monitoring and management solution for Linux systems. BatteryGuardian actively monitors your laptop's battery status and takes intelligent actions to both inform users and extend battery life.
 
 ## Features
 
 - **Battery Level Notifications**: Alerts for low, critical, and full battery levels
 - **Smart Brightness Control**: Automatically adjusts screen brightness based on battery level and charging status
 - **Multi-Environment Compatibility**: Works across different window managers (Hyprland, i3, Qtile, XFCE, etc.)
-- **Event-Based Monitoring**: Zero-latency reactions to power events using UPower, ACPI, or inotify
+- **Event-Based Monitoring**: Zero-latency reactions to power events using UPower, ACPI, or Linux kernel events
 - **Multiple Fallback Methods**: Uses various methods to detect battery status and control brightness
 - **Adaptive Polling**: Exponential back-off algorithm that minimizes CPU wakeups while staying responsive
 - **Customizable Thresholds**: Configure your own battery thresholds and brightness levels
@@ -31,24 +31,94 @@ Before using BatteryGuardian, ensure you have the following:
    - `xbacklight` (for X11 environments)
    - Direct sysfs access (automatic fallback)
 
-3. **Battery Status Tools** (at least one of these):
-   - Direct sysfs access (automatic)
-   - `acpi` (as fallback)
+3. **Optional for Event-Based Monitoring** (at least one of these):
+   - `pyudev` (Python package)
+   - `dbus-python` and `PyGObject` (Python packages)
+   - `acpid` (system package)
 
 ## Installation
+
+### Basic Installation
 
 1. Clone the repository:
 
    ```bash
-    git clone https://github.com/cyber-syntax/BatteryGuardian.git
+   git clone https://github.com/cyber-syntax/BatteryGuardian.git
    cd BatteryGuardian
    ```
 
-2. Make the script executable:
+2. Make the launcher script executable:
 
    ```bash
-   chmod +x src/battery_guardian.sh
+   chmod +x battery-guardian.py
    ```
+
+3. Install core dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+### Enhanced Installation (Recommended)
+
+For the best experience with event-based monitoring (lower resource usage):
+
+1. Use our dependency installer script:
+
+   ```bash
+   ./install_dependencies.py all
+   ```
+
+   This will install both Python packages and system dependencies necessary for event-based monitoring.
+
+## Usage
+
+### Running BatteryGuardian
+
+Simply execute the launcher script:
+
+```bash
+./battery-guardian.py
+```
+
+For automatic startup, add the script to your window manager or desktop environment's autostart configuration.
+
+### Configuration
+
+BatteryGuardian creates a configuration file at first run:
+
+- `~/.config/battery-guardian/config.yaml`
+
+You can edit this file to customize thresholds, brightness levels, and other settings.
+
+## How It Works
+
+BatteryGuardian uses multiple methods to monitor your battery:
+
+1. **Event-Based Monitoring**: If available dependencies are installed, it will use one of:
+
+   - Linux kernel udev events via `pyudev`
+   - DBus signals via `dbus-python`
+   - ACPI events via `acpi_listen`
+
+2. **Fallback Polling**: If event-based monitoring is not available, it uses an adaptive polling strategy that:
+   - Checks more frequently when the battery status changes
+   - Gradually increases sleep intervals when the status is stable
+   - Always checks frequently when battery level is critical
+
+## Choosing Between Bash and Python Versions
+
+This repository contains both the original bash implementation and a Python port:
+
+- **Bash version**: Located in `src/main.sh` and other `.sh` files
+
+  - Advantages: No Python dependencies, potentially lower resource usage
+  - Limitations: More complex logic in bash, less modular
+
+- **Python version**: Located in `src/main.py` and other `.py` files
+  - Advantages: More maintainable, better error handling, event-based monitoring
+  - Requirements: Python 3.6+ and optional dependencies
+
+Choose the version that best fits your needs and system configuration.
 
 3. The script will create the necessary configuration directories automatically when first run.
 

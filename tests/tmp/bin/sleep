@@ -1,3 +1,0 @@
-#!/bin/bash
-# Do nothing but pretend to sleep
-exit 0

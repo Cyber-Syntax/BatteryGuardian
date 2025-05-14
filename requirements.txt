@@ -1,0 +1,7 @@
+# BatteryGuardian dependencies
+PyYAML>=6.0     # For YAML configuration support (optional)
+
+# Optional dependencies for event-based monitoring (install at least one)
+# pyudev>=0.22.0  # For udev-based battery monitoring
+# dbus-python>=1.2.16  # For DBus-based battery monitoring
+# PyGObject>=3.38.0  # Required for DBus monitoring with GLib

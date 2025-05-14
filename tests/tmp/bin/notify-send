@@ -1,3 +1,0 @@
-#!/bin/bash
-echo "notify-send called with: $@"
-exit 0

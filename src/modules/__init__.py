@@ -1,0 +1,3 @@
+"""
+BatteryGuardian modules package initialization.
+"""
