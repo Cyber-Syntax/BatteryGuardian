@@ -149,23 +149,29 @@ def notify_status_change(
             )
 
     # Notify on AC connection/disconnection
+    # For AC status changes, we want immediate notifications (no throttling)
     if ac_status != previous_ac_status:
         if ac_status == "Connected":
-            if not should_throttle("ac_connected", config):
-                send_notification(
-                    "AC Power Connected",
-                    f"Battery at {battery_percent}% and charging.",
-                    "low",
-                    "battery-good-charging",
-                )
+            # AC connected notifications should always show immediately
+            send_notification(
+                "AC Power Connected",
+                f"Battery at {battery_percent}% and charging.",
+                "low",
+                "battery-good-charging",
+            )
+            # Update the last notification time to prevent repeated notifications
+            # if another status check happens very soon
+            LAST_NOTIFICATION["ac_connected"] = time.time()
         elif ac_status == "Disconnected" and previous_ac_status == "Connected":
-            if not should_throttle("ac_disconnected", config):
-                send_notification(
-                    "AC Power Disconnected",
-                    f"Battery at {battery_percent}%. Running on battery power.",
-                    "low",
-                    "battery",
-                )
+            # AC disconnected notifications should always show immediately
+            send_notification(
+                "AC Power Disconnected",
+                f"Battery at {battery_percent}%. Running on battery power.",
+                "low",
+                "battery",
+            )
+            # Update the last notification time to prevent repeated notifications
+            LAST_NOTIFICATION["ac_disconnected"] = time.time()
 
 
 def send_battery_notification(

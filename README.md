@@ -96,6 +96,7 @@ BatteryGuardian uses multiple methods to monitor your battery:
 
 1. **Event-Based Monitoring**: If available dependencies are installed, it will use one of:
 
+   - **Direct sysfs polling** (ultra-efficient, minimal CPU usage)
    - Linux kernel udev events via `pyudev`
    - DBus signals via `dbus-python`
    - ACPI events via `acpi_listen`

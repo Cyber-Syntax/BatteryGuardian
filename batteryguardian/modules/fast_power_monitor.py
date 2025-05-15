@@ -39,6 +39,17 @@ def setup_fast_ac_monitoring(
     Returns:
         True if monitoring was successfully set up, False otherwise
     """
+    # First try the most efficient sysfs-based monitoring
+    try:
+        # Try the direct sysfs polling method first (lowest CPU usage)
+        if setup_direct_ac_polling(callback, state):
+            logger.info("Successfully set up efficient sysfs-based AC monitoring")
+            return True
+    except Exception as e:
+        logger.debug("Sysfs monitoring setup failed: %s", str(e))
+        # Continue to try DBus method
+
+    # Fall back to DBus monitoring if sysfs method failed
     try:
         # Import DBus-related dependencies
         from dbus.mainloop.glib import DBusGMainLoop
@@ -142,7 +153,7 @@ def setup_fast_ac_monitoring(
                     path=ac_adapter_path,
                 )
 
-                logger.info("Started ultra-responsive AC adapter monitoring")
+                logger.info("Started ultra-responsive AC adapter monitoring via DBus")
                 main_loop.run()
 
             except Exception as e:
@@ -154,13 +165,10 @@ def setup_fast_ac_monitoring(
         )
         monitor_thread.start()
 
-        # Also set up direct polling as a fallback if needed
-        setup_direct_ac_polling(callback, state, ac_adapter_path)
-
         return True
 
     except Exception as e:
-        logger.error("Failed to set up fast AC monitoring: %s", str(e))
+        logger.error("Failed to set up any AC monitoring: %s", str(e))
         return False
 
 
@@ -170,70 +178,57 @@ def setup_direct_ac_polling(
     ac_path: Optional[str] = None,
 ) -> bool:
     """
-    Set up direct polling of AC adapter status at a high frequency.
+    Set up direct polling of AC adapter status at a high frequency using sysfs.
 
     This acts as a fallback mechanism when D-Bus signals might be delayed.
+    The sysfs polling method is extremely efficient and minimizes CPU usage.
 
     Args:
         callback: Function to call when power status changes
         state: Shared state dictionary
-        ac_path: Path to the AC adapter (optional)
+        ac_path: Path to the AC adapter (optional, not used in sysfs approach)
 
     Returns:
         True if polling was set up, False otherwise
     """
     try:
-        from dbus.mainloop.glib import DBusGMainLoop
+        import glob
+        from pathlib import Path
 
-        DBusGMainLoop(set_as_default=True)
-        import dbus
+        # Find AC adapter paths in sysfs
+        ac_adapter_paths = glob.glob("/sys/class/power_supply/AC*") + glob.glob(
+            "/sys/class/power_supply/ACAD*"
+        )
 
-        # If no AC path provided, try to find it
-        if not ac_path:
-            bus = dbus.SystemBus()
-            upower_proxy = bus.get_object(
-                "org.freedesktop.UPower", "/org/freedesktop/UPower"
-            )
-            upower_interface = dbus.Interface(upower_proxy, "org.freedesktop.UPower")
-            device_paths = upower_interface.EnumerateDevices()
-
-            for path in device_paths:
-                device = bus.get_object("org.freedesktop.UPower", path)
-                device_interface = dbus.Interface(
-                    device, "org.freedesktop.DBus.Properties"
-                )
-                device_type = device_interface.Get(
-                    "org.freedesktop.UPower.Device", "Type"
-                )
-
-                if device_type == DEVICE_TYPE_AC_ADAPTER:
-                    ac_path = path
-                    break
-
-        if not ac_path:
-            logger.warning("No AC adapter found for direct polling")
+        # Exit if no AC adapter found
+        if not ac_adapter_paths:
+            logger.warning("No AC adapter found in sysfs for direct polling")
             return False
+
+        # Use the first adapter found (most systems only have one)
+        ac_adapter_sysfs = ac_adapter_paths[0]
+        ac_online_path = Path(ac_adapter_sysfs, "online")
+
+        # Check if the online file exists and is readable
+        if not ac_online_path.is_file():
+            logger.warning(
+                f"AC adapter online status file not found at {ac_online_path}"
+            )
+            return False
+
+        logger.info(f"Using sysfs AC adapter at {ac_adapter_sysfs}")
 
         # Store the last known state to detect changes
         last_status = {"ac_online": None, "last_change": 0}
 
         def poll_ac_status():
-            bus = None
             try:
-                bus = dbus.SystemBus()
-
                 while True:
                     try:
-                        # Check AC status directly (very fast)
-                        device = bus.get_object("org.freedesktop.UPower", ac_path)
-                        device_interface = dbus.Interface(
-                            device, "org.freedesktop.DBus.Properties"
-                        )
-                        online = bool(
-                            device_interface.Get(
-                                "org.freedesktop.UPower.Device", "Online"
-                            )
-                        )
+                        # Read AC status directly from sysfs (ultra-fast, minimal CPU usage)
+                        with open(ac_online_path, "r") as f:
+                            online_status = f.read().strip()
+                            online = online_status == "1"
 
                         # If status changed or this is the first check
                         if (
@@ -247,15 +242,19 @@ def setup_direct_ac_polling(
                             last_status["ac_online"] = online
                             last_status["last_change"] = start_time
 
-                            # Use cached battery percentage for immediate response
-                            battery_percent = state.get("battery_percent", 50)
-
-                            # Call the callback with the updated status
-                            callback(battery_percent, ac_status)
+                            # Start a background thread to get accurate battery percentage
+                            # and show notification immediately
+                            threading.Thread(
+                                target=lambda: get_complete_status_and_notify(
+                                    callback, ac_status
+                                ),
+                                daemon=True,
+                                name="ACStatusChangeNotifier",
+                            ).start()
 
                             # Log the fast detection
                             logger.info(
-                                "Direct polling detected AC status change: %s",
+                                "Sysfs polling detected AC status change: %s",
                                 ac_status,
                             )
 
@@ -263,15 +262,20 @@ def setup_direct_ac_polling(
                             threading.Thread(
                                 target=lambda: get_complete_status(callback),
                                 daemon=True,
-                                name="PollCompleteUpdate",
+                                name="SysfsPollCompleteUpdate",
                             ).start()
+                    except (IOError, OSError, FileNotFoundError) as e:
+                        logger.debug("Error reading AC status from sysfs: %s", str(e))
+                        # If we can't read the file, wait a bit longer before retrying
+                        time.sleep(1)
+                        continue
                     except Exception as e:
-                        logger.debug("Error polling AC status: %s", str(e))
+                        logger.debug("Unexpected error polling AC status: %s", str(e))
 
                     # Sleep briefly - short enough for responsive updates but not so short to waste CPU
                     time.sleep(AC_PATH_MONITOR_INTERVAL)
             except Exception as e:
-                logger.error("AC polling thread error: %s", str(e))
+                logger.error("AC sysfs polling thread error: %s", str(e))
 
         # Function to get complete power status
         def get_complete_status(cb):
@@ -283,15 +287,40 @@ def setup_direct_ac_polling(
             except Exception as e:
                 logger.error("Error in background status update: %s", str(e))
 
+        # Function to get accurate battery status and immediately notify about AC changes
+        def get_complete_status_and_notify(cb, current_ac_status):
+            try:
+                from .battery import get_battery_percentage
+
+                # Get fresh battery percentage for accurate notifications
+                battery_percent = get_battery_percentage()
+
+                # Call callback with accurate battery percentage and current AC status
+                cb(battery_percent, current_ac_status)
+
+                logger.info(
+                    f"AC status change notification with accurate battery: {battery_percent}%"
+                )
+            except Exception as e:
+                logger.error(f"Error in AC status change notification: {str(e)}")
+                # Fall back to using the callback function with default values
+                try:
+                    battery_percent = state.get("battery_percent", 50)
+                    cb(battery_percent, current_ac_status)
+                except Exception as nested_e:
+                    logger.error(
+                        f"Failed to send fallback notification: {str(nested_e)}"
+                    )
+
         # Start the polling thread
         polling_thread = threading.Thread(
-            target=poll_ac_status, daemon=True, name="ACStatusPoller"
+            target=poll_ac_status, daemon=True, name="SysfsACStatusPoller"
         )
         polling_thread.start()
 
-        logger.info("Started direct AC adapter polling")
+        logger.info("Started efficient sysfs-based AC adapter polling")
         return True
 
     except Exception as e:
-        logger.error("Failed to set up direct AC polling: %s", str(e))
+        logger.error("Failed to set up sysfs AC polling: %s", str(e))
         return False

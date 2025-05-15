@@ -345,9 +345,10 @@ def start_monitoring(config: Dict[str, Any], state: Dict[str, Any]) -> bool:
     Attempt to start event-based monitoring using a modular approach.
 
     Tries multiple approaches for battery monitoring in order of preference:
-    1. Using dbus for UPower events (needs dbus-python and PyGObject packages)
-    2. Using acpi_listen for ACPI events (needs acpid package)
-    3. Using pyudev for udev events (needs pyudev package)
+    1. Using sysfs for direct power status polling (most CPU efficient)
+    2. Using dbus for UPower events (needs dbus-python and PyGObject packages)
+    3. Using acpi_listen for ACPI events (needs acpid package)
+    4. Using pyudev for udev events (needs pyudev package)
 
     Args:
         config: Application configuration
@@ -405,17 +406,22 @@ def start_monitoring(config: Dict[str, Any], state: Dict[str, Any]) -> bool:
     try:
         from .fast_power_monitor import setup_fast_ac_monitoring
 
-        # Try to set up the ultra-responsive AC adapter monitoring
+        # Try to set up the ultra-responsive AC adapter monitoring (now prioritizing sysfs)
         if setup_fast_ac_monitoring(process_battery_event, state):
-            logger.info("Successfully started ultra-responsive power monitoring")
+            logger.info(
+                "Successfully started ultra-responsive power monitoring with sysfs"
+            )
 
             # Create a marker thread
-            def keep_alive():
+            def keep_alive_fast():
                 while True:
-                    time.sleep(5)  # Shorter interval for responsiveness
+                    try:
+                        time.sleep(300)  # Keep thread alive
+                    except Exception:
+                        break
 
             marker_thread = threading.Thread(
-                target=keep_alive, daemon=True, name="FastPowerMonitorMarker"
+                target=keep_alive_fast, daemon=True, name="FastPowerMonitorMarker"
             )
             marker_thread.start()
             MONITORING_THREADS.append(marker_thread)
