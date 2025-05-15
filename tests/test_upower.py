@@ -7,6 +7,7 @@ This is a standalone script to test UPower monitoring.
 """
 
 import logging
+import socket
 import sys
 import time
 
@@ -39,7 +40,6 @@ def try_upower():
 
 def try_acpid_socket():
     """Attempt to connect to the acpid UNIX socket."""
-    import socket
 
     sock_path = "/var/run/acpid.socket"
     try:

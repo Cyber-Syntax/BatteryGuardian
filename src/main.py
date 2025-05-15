@@ -18,25 +18,54 @@ import sys
 import time
 from typing import Any, Dict
 
-# Use relative imports when running as part of the package
-from .modules.battery import (
-    check_battery_exists,
-    check_battery_status,
-)
-from .modules.brightness import adjust_brightness
-from .modules.config import Config, load_config
-from .modules.log import get_logger, setup_logging
-from .modules.notification import (
-    notify_status_change,
-)
-from .modules.utils import (
-    check_dependencies,
-    check_lock,
-    create_lock_file,
-    get_sleep_duration,
-    remove_lock_file,
-    start_monitoring,
-)
+# Use relative imports when running as part of the package, or absolute imports when running directly
+try:
+    # Try relative imports first (when run as part of the package)
+    from .modules.battery import (
+        check_battery_exists,
+        check_battery_status,
+    )
+    from .modules.brightness import adjust_brightness
+    from .modules.config import Config, load_config
+    from .modules.log import get_logger, setup_logging
+    from .modules.notification import (
+        notify_status_change,
+    )
+    from .modules.utils import (
+        check_dependencies,
+        check_lock,
+        create_lock_file,
+        get_sleep_duration,
+        remove_lock_file,
+        start_monitoring,
+    )
+except ImportError:
+    # Fall back to absolute imports when run directly
+    import sys
+    from pathlib import Path
+
+    # Add the parent directory to the Python path
+    script_dir = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(script_dir))
+
+    from src.modules.battery import (
+        check_battery_exists,
+        check_battery_status,
+    )
+    from src.modules.brightness import adjust_brightness
+    from src.modules.config import Config, load_config
+    from src.modules.log import get_logger, setup_logging
+    from src.modules.notification import (
+        notify_status_change,
+    )
+    from src.modules.utils import (
+        check_dependencies,
+        check_lock,
+        create_lock_file,
+        get_sleep_duration,
+        remove_lock_file,
+        start_monitoring,
+    )
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -53,7 +82,12 @@ def cleanup(exit_code: int = 0) -> None:
         exit_code: Exit code to return when exiting.
     """
     logger.info("Battery Guardian shutting down with exit code: %d", exit_code)
-    remove_lock_file()
+
+    # Try to remove the lock file, but don't fail if it's already gone
+    try:
+        remove_lock_file()
+    except Exception as e:
+        logger.warning("Error during cleanup while removing lock file: %s", str(e))
 
     # No need to explicitly terminate threads as they're daemonic
 
@@ -148,15 +182,18 @@ def _main_impl() -> None:
         logger.error("Missing required dependencies. Exiting.")
         sys.exit(1)
 
-    # Check lock file
+    # Check lock file and immediately create it if it doesn't exist
+    # This prevents race conditions during startup
     if not check_lock():
         logger.error(
             "Another instance is already running or lock file exists. Exiting."
         )
         sys.exit(1)
 
-    # Create lock file
-    create_lock_file()
+    # Create lock file - now we're sure we're good to go
+    if not create_lock_file():
+        logger.error("Failed to create lock file. Exiting to avoid data corruption.")
+        sys.exit(1)
 
     # Check if a battery is present
     if not check_battery_exists():
@@ -179,6 +216,11 @@ def _main_impl() -> None:
     logger.info("Starting event-based battery monitoring...")
     monitoring_started = start_monitoring(config, state)
 
+    # Initialize monitoring variables (needed regardless of monitoring success)
+    event_monitoring_failed = False
+    monitoring_check_counter = 0
+
+    # Always enter the polling loop, but with different intervals based on monitoring status
     if not monitoring_started:
         logger.warning("Event-based monitoring could not be initialized.")
         logger.warning("This means higher power consumption due to frequent wake-ups.")
@@ -187,68 +229,69 @@ def _main_impl() -> None:
         logger.info("  python install_dependencies.py events")
         logger.info("or install dependencies manually as indicated in the logs above.")
 
-        # Main fallback loop with adaptive back-off
-        event_monitoring_failed = False
-        monitoring_check_counter = 0
-
-        while True:
-            # Check if event monitoring has started since we began
+    # Main loop - always run this regardless of whether event monitoring was started
+    while True:
+        # Check if event monitoring has started since we began
+        try:
             from .modules.utils import check_monitoring_threads
+        except ImportError:
+            from src.modules.utils import check_monitoring_threads
 
-            if monitoring_started and monitoring_check_counter % 10 == 0:
-                # Check every 10 iterations if our event threads are still alive
-                if not check_monitoring_threads():
-                    if not event_monitoring_failed:
-                        logger.warning("Event-based monitoring has stopped working")
-                        logger.warning("Falling back to polling loop")
-                        event_monitoring_failed = True
-                elif event_monitoring_failed:
-                    # Monitoring threads have recovered
-                    logger.info("Event-based monitoring has recovered")
-                    event_monitoring_failed = False
+        if monitoring_started and monitoring_check_counter % 10 == 0:
+            # Check every 10 iterations if our event threads are still alive
+            if not check_monitoring_threads():
+                if not event_monitoring_failed:
+                    logger.warning("Event-based monitoring has stopped working")
+                    logger.warning("Falling back to polling loop")
+                    event_monitoring_failed = True
+            elif event_monitoring_failed:
+                # Monitoring threads have recovered
+                logger.info("Event-based monitoring has recovered")
+                event_monitoring_failed = False
 
-            monitoring_check_counter += 1
+        monitoring_check_counter += 1
 
-            # Update state with current battery info
-            state = check_battery_and_adjust_brightness(config, state)
+        # Update state with current battery info
+        state = check_battery_and_adjust_brightness(config, state)
 
-            # Detect if status has changed
-            has_changed = 0
-            if (
-                state["previous_battery_percent"] != state["battery_percent"]
-                or state["previous_ac_status"] != state["ac_status"]
-            ):
-                has_changed = 1
+        # Detect if status has changed
+        has_changed = 0
+        if (
+            state["previous_battery_percent"] != state["battery_percent"]
+            or state["previous_ac_status"] != state["ac_status"]
+        ):
+            has_changed = 1
 
-            state["has_changed"] = has_changed
+        state["has_changed"] = has_changed
 
-            # Get sleep duration based on status and change detection
-            sleep_duration = get_sleep_duration(
-                state["battery_percent"], state["ac_status"], has_changed, config
+        # Get sleep duration based on status and change detection
+        sleep_duration = get_sleep_duration(
+            state["battery_percent"], state["ac_status"], has_changed, config
+        )
+
+        # Validate sleep duration
+        if not isinstance(sleep_duration, int) or sleep_duration < 10:
+            logger.warning(
+                "Invalid sleep duration: '%s'. Using safe default of 30 seconds.",
+                str(sleep_duration),
             )
+            sleep_duration = 30
 
-            # Validate sleep duration
-            if not isinstance(sleep_duration, int) or sleep_duration < 10:
-                logger.warning(
-                    "Invalid sleep duration: '%s'. Using safe default of 30 seconds.",
-                    str(sleep_duration),
-                )
-                sleep_duration = 30
+        # If event monitoring is working, use longer sleep time for the polling loop
+        if monitoring_started and not event_monitoring_failed:
+            sleep_duration = max(
+                sleep_duration, 60
+            )  # At least 60 seconds when event monitoring is active
 
-            # If event monitoring is working, use longer sleep time for the polling loop
-            if monitoring_started and not event_monitoring_failed:
-                sleep_duration = max(
-                    sleep_duration, 60
-                )  # At least 60 seconds when event monitoring is active
+        # Update previous values for next comparison
+        state["previous_battery_percent"] = state["battery_percent"]
+        state["previous_ac_status"] = state["ac_status"]
 
-            # Update previous values for next comparison
-            state["previous_battery_percent"] = state["battery_percent"]
-            state["previous_ac_status"] = state["ac_status"]
-
-            # Sleep before checking again
-            logger.info("Sleeping for %ds (adaptive back-off)", sleep_duration)
-            time.sleep(sleep_duration)
+        # Sleep before checking again
+        logger.info("Sleeping for %ds (adaptive back-off)", sleep_duration)
+        time.sleep(sleep_duration)
 
 
+# Add a block to run this module directly
 if __name__ == "__main__":
     main()

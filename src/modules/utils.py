@@ -11,7 +11,6 @@ License: BSD 3-Clause License
 import atexit
 import os
 import shutil
-import subprocess
 import threading
 import time
 from typing import Any, Dict
@@ -84,6 +83,26 @@ def create_lock_file() -> bool:
     app_dirs = get_app_dirs()
     lock_file = app_dirs["runtime_dir"] / "battery-guardian.lock"
 
+    # First check if lock file exists and contains our PID
+    # This might happen in the unlikely event that the file was created between
+    # the check_lock call and now
+    if lock_file.exists():
+        try:
+            with open(lock_file, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content == str(os.getpid()):
+                    # Lock file already has our PID, we're good
+                    return True
+
+            # If we get here, the lock file exists with a different PID
+            # We should not proceed as check_lock should have caught this
+            logger.error("Lock file exists but doesn't contain our PID")
+            return False
+        except (IOError, PermissionError) as e:
+            logger.error("Failed to read lock file: %s", str(e))
+            return False
+
+    # Create the lock file with our PID
     try:
         with open(lock_file, "w", encoding="utf-8") as f:
             f.write(str(os.getpid()))
@@ -112,6 +131,12 @@ def check_lock() -> bool:
             content = f.read().strip()
             try:
                 pid = int(content)
+
+                # Check if this is our own PID (could happen during startup)
+                if pid == os.getpid():
+                    logger.info("Lock file contains our own PID, continuing")
+                    return True
+
             except ValueError:
                 logger.warning("Invalid PID in lock file: %s", content)
                 lock_file.unlink(missing_ok=True)
@@ -121,7 +146,7 @@ def check_lock() -> bool:
         try:
             # Try to send signal 0 to check if process exists
             os.kill(pid, 0)
-            
+
             # Process exists, but let's do a more thorough check to make sure
             # it's actually our application and not some other process with the same PID
             try:
@@ -131,25 +156,31 @@ def check_lock() -> bool:
                     with open(proc_path, "r", encoding="utf-8") as f:
                         cmdline = f.read()
                         # Check if it looks like our application
-                        if "battery" not in cmdline.lower() and "guardian" not in cmdline.lower():
-                            logger.warning("Found process with PID %d but it appears to be a different application", pid)
+                        if (
+                            "battery" not in cmdline.lower()
+                            and "guardian" not in cmdline.lower()
+                        ):
+                            logger.warning(
+                                "Found process with PID %d but it appears to be a different application",
+                                pid,
+                            )
                             logger.info("Removing stale lock file")
                             lock_file.unlink(missing_ok=True)
                             return True
-                
+
                 logger.warning("Another instance is already running (PID: %d)", pid)
                 return False
             except (IOError, PermissionError):
                 # Can't read process info, assume it's our process to be safe
                 logger.warning("Another instance is already running (PID: %d)", pid)
                 return False
-                
+
         except OSError:
             # Process not found, remove stale lock
             logger.info("Detected stale lock file, removing it")
             lock_file.unlink(missing_ok=True)
             return True
-            
+
     except (IOError, ValueError) as e:
         logger.warning("Invalid lock file found: %s", str(e))
         # Invalid lock file, safe to proceed
@@ -190,45 +221,78 @@ def remove_lock_file() -> bool:
                 logger.info("Lock file removed")
                 return True
             except Exception as e:
+                # If file doesn't exist, that's fine - someone else removed it
+                if isinstance(e, FileNotFoundError):
+                    logger.info("Lock file already removed")
+                    return True
                 logger.error("Error removing lock file: %s", str(e))
                 return False
         else:
             logger.warning(
                 "Lock file exists but belongs to another process (PID %s vs current %s)",
                 lock_pid,
-                current_pid
+                current_pid,
             )
-            # If this process is being run as root or with sufficient privileges,
-            # we can try to clean up stale lock files
-            if os.geteuid() == 0:
+
+            # If this is our own lockfile from a previous run (which died unexpectedly),
+            # clean it up - check this by looking if the process exists
+            try:
+                pid = int(lock_pid)
+                os.kill(pid, 0)
+                # Process exists, check if it's ours or not
                 try:
-                    # Try to check if the process exists
-                    try:
-                        pid = int(lock_pid)
-                        os.kill(pid, 0)
-                        # Process exists, don't remove the lock
-                        logger.warning(
-                            "Process %d is still running, not removing its lock file", pid
-                        )
-                        return False
-                    except (ValueError, OSError):
-                        # Process doesn't exist, safe to remove the lock
-                        lock_file.unlink()
-                        logger.info("Removed stale lock file from non-existent process")
-                        return True
+                    proc_path = f"/proc/{pid}/cmdline"
+                    if os.path.exists(proc_path):
+                        with open(proc_path, "r", encoding="utf-8") as f:
+                            cmdline = f.read()
+                            # If it doesn't look like our app, clean up the lock
+                            if (
+                                "battery" not in cmdline.lower()
+                                and "guardian" not in cmdline.lower()
+                            ):
+                                lock_file.unlink(missing_ok=True)
+                                logger.info(
+                                    "Removed stale lock file belonging to a different application"
+                                )
+                                return True
+                except (IOError, PermissionError):
+                    # Can't read process info
+                    pass
+
+                # Process exists and seems to be our app, don't remove the lock
+                logger.warning(
+                    "Process %d is still running, not removing its lock file", pid
+                )
+                return False
+            except (ValueError, OSError):
+                # Process doesn't exist, safe to remove the lock
+                try:
+                    lock_file.unlink()
+                    logger.info("Removed stale lock file from non-existent process")
+                    return True
+                except FileNotFoundError:
+                    # File was already removed, that's fine
+                    logger.info("Stale lock file was already removed")
+                    return True
                 except Exception as e:
-                    logger.error("Error checking process existence: %s", str(e))
-            return False
+                    logger.error("Error removing stale lock file: %s", str(e))
+                    return False
     except (IOError, ValueError) as e:
-        logger.error("Error reading lock file: %s", str(e))
+        logger.warning("Error reading lock file: %s", str(e))
         # Try to remove it anyway as a last resort
         try:
             lock_file.unlink()
             logger.info("Removed unreadable lock file")
             return True
-        except Exception:
-            pass
-        return False
+        except FileNotFoundError:
+            # File was already removed, that's fine
+            logger.info("Unreadable lock file was already removed")
+            return True
+        except Exception as e:
+            logger.error("Failed to remove unreadable lock file: %s", str(e))
+            return False
+
+    return False
 
 
 def get_sleep_duration(
@@ -278,7 +342,7 @@ def get_sleep_duration(
 
 def start_monitoring(config: Dict[str, Any], state: Dict[str, Any]) -> bool:
     """
-    Attempt to start event-based monitoring (udev or other system events).
+    Attempt to start event-based monitoring using a modular approach.
 
     Tries multiple approaches for battery monitoring in order of preference:
     1. Using dbus for UPower events (needs dbus-python and PyGObject packages)
@@ -294,13 +358,100 @@ def start_monitoring(config: Dict[str, Any], state: Dict[str, Any]) -> bool:
     """
     global MONITORING_THREADS
 
+    # Define a callback to process battery events from any monitoring method
+    def process_battery_event(battery_percent: int, ac_status: str) -> None:
+        try:
+            # Import these here to avoid circular imports
+            from ..modules.brightness import adjust_brightness
+            from ..modules.notification import notify_status_change
+
+            # Previous values
+            prev_battery_percent = state.get("battery_percent", 0)
+            prev_ac_status = state.get("ac_status", "Unknown")
+
+            # Update shared state
+            new_state = {
+                "battery_percent": battery_percent,
+                "ac_status": ac_status,
+                "previous_battery_percent": prev_battery_percent,
+                "previous_ac_status": prev_ac_status,
+            }
+
+            # Check for changes requiring notifications
+            notify_status_change(
+                battery_percent,
+                prev_battery_percent,
+                ac_status,
+                prev_ac_status,
+                config,
+            )
+
+            # Adjust screen brightness based on battery status
+            if config.get("brightness_control_enabled", True):
+                adjust_brightness(battery_percent, ac_status, config)
+
+            # Update state for next comparison
+            state.update(new_state)
+
+            logger.debug(
+                "Processed power event: battery=%d%%, AC=%s",
+                battery_percent,
+                ac_status,
+            )
+        except Exception as e:
+            logger.exception("Error processing power event: %s", e)
+
     # First try UPower/dbus method (most efficient, widely available on desktop environments)
-    if _start_upower_monitoring(config, state):
-        return True
+    try:
+        from .upower import initialize_upower_monitoring
+
+        if initialize_upower_monitoring(process_battery_event, state):
+            logger.info("Successfully started UPower monitoring")
+
+            # Create a long-running marker thread to keep monitoring active
+            def keep_alive():
+                while True:
+                    time.sleep(60)  # Just keep the thread alive
+
+            marker_thread = threading.Thread(
+                target=keep_alive, daemon=True, name="UPowerMonitorMarker"
+            )
+            marker_thread.start()
+            MONITORING_THREADS.append(marker_thread)
+            return True
+    except ImportError as e:
+        logger.warning(f"Could not import UPower monitoring module: {e}")
+        logger.info(
+            "To enable UPower monitoring, install: pip install dbus-python PyGObject"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to start UPower monitoring: {e}")
 
     # Next try acpi_listen (commonly available on laptops)
-    if _start_acpi_monitoring(config, state):
-        return True
+    try:
+        from .acpid import initialize_acpid_monitoring
+
+        if initialize_acpid_monitoring(process_battery_event, state):
+            logger.info("Successfully started ACPID monitoring")
+
+            # Create a long-running marker thread to keep monitoring active
+            def keep_alive():
+                while True:
+                    time.sleep(60)  # Just keep the thread alive
+
+            marker_thread = threading.Thread(
+                target=keep_alive, daemon=True, name="ACPIDMonitorMarker"
+            )
+            marker_thread.start()
+            MONITORING_THREADS.append(marker_thread)
+            return True
+    except ImportError as e:
+        logger.warning(f"Could not import ACPID monitoring module: {e}")
+        logger.info(
+            "To enable ACPID monitoring, install the acpid package on your system"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to start ACPID monitoring: {e}")
 
     # Finally try pyudev (fallback for Linux systems)
     if _start_pyudev_monitoring(config, state):
@@ -345,281 +496,42 @@ def check_monitoring_threads() -> bool:
         return True
 
 
+# Register an exit handler that will always run at process termination
 def force_exit_handler() -> None:
     """
-    Force clean exit for zombie processes.
-    This function is registered at import time and will be called
-    when Python is finalizing (even in case of signals or system exit).
+    Force cleanup at exit to ensure lockfiles and resources are properly cleaned up.
+
+    This function is called when the interpreter is exiting and helps ensure
+    no stale lock files are left behind.
     """
-    # Always try to clean up lock file on exit
     try:
-        remove_lock_file()
-    except Exception as e:
-        # This may be called during interpreter shutdown when logging is not available
-        # so just try a simple print
-        try:
-            print(f"Error cleaning up lock file during exit: {e}")
-        except Exception:
-            pass  # Give up if even print fails
+        app_dirs = get_app_dirs()
+        lock_file = app_dirs["runtime_dir"] / "battery-guardian.lock"
+
+        # Check if lock file exists and contains our PID
+        if lock_file.exists():
+            try:
+                with open(lock_file, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content == str(os.getpid()):
+                        # If it's our lock file, remove it
+                        lock_file.unlink(missing_ok=True)
+                        # Don't log with logger as it might be unavailable during shutdown
+                        print("Force removed lock file at exit")
+            except Exception:
+                # Don't raise exceptions during shutdown
+                pass
+    except Exception:
+        # We're exiting anyway, so just pass silently
+        pass
 
 
-# Register the force exit handler
+# Register the force exit handler to run at interpreter shutdown
 atexit.register(force_exit_handler)
 
 
-def _start_upower_monitoring(config: Dict[str, Any], state: Dict[str, Any]) -> bool:
-    """
-    Start UPower-based event monitoring for battery status changes.
-
-    Args:
-        config: Application configuration
-        state: Current state dictionary
-
-    Returns:
-        True if monitoring was successfully started, False otherwise
-    """
-    try:
-        # Import our dedicated UPower monitor module
-        from .upower import initialize_upower_monitoring
-
-        logger.info("Attempting to use UPower for event-based monitoring")
-        
-        # Define a callback to process UPower events
-        def process_battery_event(battery_percent: int, ac_status: str) -> None:
-            try:
-                # Import these here to avoid circular imports
-                from ..modules.brightness import adjust_brightness
-                from ..modules.notification import notify_status_change
-                
-                # Previous values
-                prev_battery_percent = state.get("battery_percent", 0)
-                prev_ac_status = state.get("ac_status", "Unknown")
-                
-                # Update shared state
-                new_state = {
-                    "battery_percent": battery_percent,
-                    "ac_status": ac_status,
-                    "previous_battery_percent": prev_battery_percent,
-                    "previous_ac_status": prev_ac_status,
-                }
-                
-                # Check for changes requiring notifications
-                notify_status_change(
-                    battery_percent,
-                    prev_battery_percent,
-                    ac_status,
-                    prev_ac_status,
-                    config,
-                )
-                
-                # Adjust screen brightness based on battery status
-                if config.get("brightness_control_enabled", True):
-                    adjust_brightness(battery_percent, ac_status, config)
-                
-                # Update state for next comparison
-                state.update(new_state)
-                
-                logger.debug(
-                    "Processed power event: battery=%d%%, AC=%s",
-                    battery_percent,
-                    ac_status,
-                )
-            except Exception as e:
-                logger.exception("Error processing power event: %s", e)
-
-        # Initialize UPower monitoring with our callback
-        success = initialize_upower_monitoring(process_battery_event, state)
-        
-        if success:
-            logger.info("Successfully started UPower monitoring")
-            return True
-        else:
-            logger.warning("Failed to initialize UPower monitoring")
-            return False
-                
-                # Try systemd-logind as fallback
-                if not success:
-                    try:
-                        bus.add_signal_receiver(
-                            power_signal_handler,
-                            dbus_interface="org.freedesktop.login1.Manager",
-                            signal_name="PrepareForSleep",
-                        )
-                        logger.info("Connected to systemd-logind D-Bus signals")
-                        success = True
-                    except Exception as e:
-                        logger.warning("Failed to connect to systemd-logind signals: %s", e)
-                        return False
-                
-                if not success:
-                    logger.warning("Failed to connect to any power-related D-Bus signals")
-                    return False
-                
-                # Start the main loop
-                loop = GLib.MainLoop()
-                loop.run()
-                
-            except Exception as e:
-                logger.exception("Error in GLib main loop thread: %s", e)
-                return False
-            finally:
-                logger.info("GLib main loop thread exiting")
-                # Make sure the monitor thread knows to exit too
-                thread_running.clear()
-        
-        # Start the GLib main loop in a separate thread
-        glib_thread = threading.Thread(target=glib_main_loop, daemon=True)
-        glib_thread.start()
-        
-        # Register both threads for monitoring
-        MONITORING_THREADS.append(monitor_thread)
-        MONITORING_THREADS.append(glib_thread)
-        
-        # Wait a bit to ensure everything is started
-        time.sleep(2)
-        
-        # Check if both threads are still running
-        if monitor_thread.is_alive() and glib_thread.is_alive():
-            logger.info("Successfully started UPower battery monitoring")
-            # Trigger initial event to update status
-            power_event.set()
-            return True
-        else:
-            logger.warning("UPower monitoring thread failed to start")
-            # Cleanup if something failed
-            thread_running.clear()
-            return False
-            
-    except ImportError:
-        logger.warning("dbus-python or PyGObject packages are not installed")
-        logger.info(
-            "To enable UPower monitoring, install: pip install dbus-python PyGObject"
-        )
-    except Exception as e:
-        logger.warning("Failed to set up UPower monitoring: %s", str(e))
-        
-    return False
-
-
-def _start_acpi_monitoring(config: Dict[str, Any], state: Dict[str, Any]) -> bool:
-    """
-    Start ACPI event-based monitoring for battery status changes.
-
-    Args:
-        config: Application configuration
-        state: Current state dictionary
-
-    Returns:
-        True if monitoring was successfully started, False otherwise
-    """
-    if check_command_exists("acpi_listen"):
-        try:
-            logger.info("Attempting to use acpi_listen for event-based monitoring")
-
-            # Create a function to monitor acpi events
-            def monitor_acpi_events():
-                try:
-                    # Start acpi_listen process
-                    process = subprocess.Popen(
-                        ["acpi_listen"],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        bufsize=1,
-                    )
-
-                    logger.info("Started acpi_listen monitoring")
-
-                    # Process events from acpi_listen
-                    try:
-                        for line in iter(process.stdout.readline, ""):
-                            # Check if this is a battery or AC event
-                            if (
-                                "battery" in line.lower()
-                                or "ac" in line.lower()
-                                or "power" in line.lower()
-                            ):
-                                try:
-                                    # Process battery event
-                                    from ..modules.battery import check_battery_status
-                                    from ..modules.brightness import adjust_brightness
-                                    from ..modules.notification import (
-                                        notify_status_change,
-                                    )
-
-                                    battery_percent, ac_status = check_battery_status()
-
-                                    # Update state
-                                    new_state = {
-                                        "battery_percent": battery_percent,
-                                        "ac_status": ac_status,
-                                        "previous_battery_percent": state.get(
-                                            "battery_percent", 0
-                                        ),
-                                        "previous_ac_status": state.get(
-                                            "ac_status", "Unknown"
-                                        ),
-                                    }
-
-                                    # Check for changes requiring notifications
-                                    notify_status_change(
-                                        battery_percent,
-                                        state.get("battery_percent", 0),
-                                        ac_status,
-                                        state.get("ac_status", "Unknown"),
-                                        config,
-                                    )
-
-                                    # Adjust screen brightness based on battery status
-                                    if config.get("brightness_control_enabled", True):
-                                        adjust_brightness(
-                                            battery_percent, ac_status, config
-                                        )
-
-                                    # Update state for next comparison
-                                    state.update(new_state)
-
-                                    logger.debug(
-                                        "Processed ACPI event: battery=%d%%, AC=%s",
-                                        battery_percent,
-                                        ac_status,
-                                    )
-                                except Exception as e:
-                                    logger.error(
-                                        "Error processing ACPI event: %s", str(e)
-                                    )
-                    except KeyboardInterrupt:
-                        logger.info("ACPI monitoring interrupted")
-                    finally:
-                        # Clean up the process
-                        process.terminate()
-                        process.wait(timeout=2)
-
-                    # If we get here normally, acpi_listen has terminated
-                    logger.warning("acpi_listen process terminated unexpectedly")
-
-                except Exception as e:
-                    logger.error("Error in ACPI monitoring thread: %s", str(e))
-
-            # Start the monitoring in a separate thread
-            thread = threading.Thread(target=monitor_acpi_events, daemon=True)
-            thread.start()
-            MONITORING_THREADS.append(thread)
-
-            # Give it a moment to initialize and check if it's still running
-            time.sleep(1)
-            if thread.is_alive():
-                logger.info("Successfully started ACPI battery monitoring")
-                return True
-            else:
-                logger.warning("ACPI monitoring thread failed to start")
-
-        except Exception as e:
-            logger.warning("Failed to set up acpi_listen monitoring: %s", str(e))
-    else:
-        logger.warning("acpi_listen command not found, cannot use ACPI monitoring")
-
-    return False
+# These functions have been integrated directly into start_monitoring
+# for better modularity
 
 
 def _start_pyudev_monitoring(config: Dict[str, Any], state: Dict[str, Any]) -> bool:

@@ -36,10 +36,16 @@ def initialize_upower_monitoring(
     """
     # Try to import required modules
     try:
+        # Import these first to avoid circular imports
         import dbus
         import gi
         from dbus.mainloop.glib import DBusGMainLoop
 
+        # Set up DBus with GLib main loop before any D-Bus operations
+        # This is crucial and must be done before creating any bus connections
+        DBusGMainLoop(set_as_default=True)
+
+        # Now import GLib
         gi.require_version("GLib", "2.0")
         from gi.repository import GLib
     except ImportError as e:
@@ -49,18 +55,23 @@ def initialize_upower_monitoring(
         )
         return False
 
+    # Flag to coordinate between threads
+    monitor_ready = threading.Event()
+    monitor_error = threading.Event()
+
     # Create a thread to run the GLib main loop
     def run_upower_monitor():
         try:
-            # Set up DBus with GLib main loop
-            logger.info("Initializing D-Bus main loop for UPower monitoring")
-            DBusGMainLoop(set_as_default=True)
-
             # Create the main loop
             main_loop = GLib.MainLoop()
 
             # Connect to system bus
-            bus = dbus.SystemBus()
+            try:
+                bus = dbus.SystemBus()
+            except Exception as e:
+                logger.error(f"Failed to connect to system bus: {e}")
+                monitor_error.set()
+                return
 
             # Create signal handler
             def power_signal_handler(*_args, **_kwargs):
@@ -97,17 +108,26 @@ def initialize_upower_monitoring(
 
                 logger.info("Successfully connected to UPower D-Bus signals")
 
+                # Signal that we're ready
+                monitor_ready.set()
+
                 # Run the main loop
                 logger.info("Starting UPower monitoring main loop")
                 main_loop.run()
             except Exception as e:
                 logger.error(f"Failed to set up UPower monitoring: {e}")
-                if main_loop and main_loop.is_running():
+                monitor_error.set()
+                if (
+                    "main_loop" in locals()
+                    and hasattr(main_loop, "is_running")
+                    and main_loop.is_running()
+                ):
                     main_loop.quit()
                 return
 
         except Exception as e:
             logger.error(f"Error in UPower monitoring thread: {e}")
+            monitor_error.set()
 
     # Start the monitoring thread
     monitor_thread = threading.Thread(
@@ -117,8 +137,18 @@ def initialize_upower_monitoring(
     try:
         monitor_thread.start()
 
-        # Give it a moment to initialize
-        time.sleep(1)
+        # Wait for thread to initialize (with timeout)
+        start_time = time.time()
+        timeout = 5  # seconds
+        while not (monitor_ready.is_set() or monitor_error.is_set()):
+            if time.time() - start_time > timeout:
+                logger.warning("Timed out waiting for UPower monitoring to start")
+                return False
+            time.sleep(0.1)
+
+        if monitor_error.is_set():
+            logger.warning("Error occurred while initializing UPower monitoring")
+            return False
 
         if monitor_thread.is_alive():
             logger.info("Successfully started UPower battery monitoring")
@@ -139,6 +169,11 @@ def check_upower_availability() -> bool:
         True if UPower is available, False otherwise
     """
     try:
+        # Required to set up the mainloop before any D-Bus operations
+        from dbus.mainloop.glib import DBusGMainLoop
+
+        DBusGMainLoop(set_as_default=True)
+
         import dbus
 
         bus = dbus.SystemBus()
@@ -157,6 +192,11 @@ def get_battery_status_upower() -> Optional[tuple[int, str]]:
         Tuple of (battery_percentage, ac_status) or None if failed
     """
     try:
+        # Required to set up the mainloop before any D-Bus operations
+        from dbus.mainloop.glib import DBusGMainLoop
+
+        DBusGMainLoop(set_as_default=True)
+
         import dbus
 
         bus = dbus.SystemBus()
