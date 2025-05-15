@@ -85,7 +85,7 @@ class TestUPowerModule(unittest.TestCase):
         """Test initializing UPower monitoring."""
         # Mock the battery status check to simulate events
         with mock.patch(
-            "src.modules.upower.get_battery_status_upower",
+            "batteryguardian.modules.upower.get_battery_status_upower",
             return_value=(75, "Connected"),
         ):
             success = initialize_upower_monitoring(self.callback_function, self.state)

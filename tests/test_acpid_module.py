@@ -78,7 +78,7 @@ class TestACPIDModule(unittest.TestCase):
             ),
         ):
             with mock.patch(
-                "src.modules.battery.check_battery_status",
+                "batteryguardian.modules.battery.check_battery_status",
                 return_value=(75, "Connected"),
             ):
                 success = initialize_acpid_monitoring(
