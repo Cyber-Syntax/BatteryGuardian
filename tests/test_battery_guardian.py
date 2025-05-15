@@ -25,7 +25,7 @@ sys.path.append("/home/developer/Documents/repository/BatteryGuardian")
 
 # Import our modules
 try:
-    from src.modules import acpid, battery, upower, utils
+    from batteryguardian.modules import acpid, battery, upower, utils
 except ImportError as e:
     logger.error(f"Error importing modules: {e}")
     sys.exit(1)

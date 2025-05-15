@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 sys.path.append("/home/developer/Documents/repository/BatteryGuardian")
 
 try:
-    from src.modules import battery, utils
+    from batteryguardian.modules import battery, utils
 except ImportError as e:
     logger.error(f"Failed to import modules: {e}")
     sys.exit(1)
@@ -91,7 +91,7 @@ def main():
             # Manually trigger a check (simulating an event)
             if battery.UPOWER_AVAILABLE and time.time() - end_time + 10 > 5:
                 logger.info("Triggering a manual battery check...")
-                from src.modules.upower import get_battery_status_upower
+                from batteryguardian.modules.upower import get_battery_status_upower
 
                 new_status = get_battery_status_upower()
                 if new_status:

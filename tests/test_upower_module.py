@@ -26,7 +26,7 @@ sys.path.append("/home/developer/Documents/repository/BatteryGuardian")
 
 # Try to import the UPower module
 try:
-    from src.modules.upower import (
+    from batteryguardian.modules.upower import (
         check_upower_availability,
         get_battery_status_upower,
         initialize_upower_monitoring,

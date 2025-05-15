@@ -26,11 +26,11 @@ sys.path.append("/home/developer/Documents/repository/BatteryGuardian")
 
 # Try to import the ACPID module
 try:
-    from src.modules.acpid import (
+    from batteryguardian.modules.acpid import (
         check_acpid_availability,
         initialize_acpid_monitoring,
     )
-    from src.modules.utils import check_command_exists
+    from batteryguardian.modules.utils import check_command_exists
 except ImportError as e:
     logger.error(f"Failed to import ACPID module: {e}")
     logger.error("Make sure you're running this from the project root directory")

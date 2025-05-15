@@ -17,7 +17,7 @@ if __name__ == "__main__":
     # Check if we're being asked to clean up lock files
     if len(sys.argv) > 1 and sys.argv[1] in ["cleanup", "clean", "remove-lock"]:
         # Import and directly call the lock file cleanup function
-        from src.modules.utils import get_app_dirs
+        from batteryguardian.modules.utils import get_app_dirs
 
         # Remove lock file if it exists
         app_dirs = get_app_dirs()
@@ -35,7 +35,7 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # Normal execution - import and run the main function
-    from src.main import main
+    from batteryguardian.main import main
 
     # Call the main() function from the imported main module
     main()

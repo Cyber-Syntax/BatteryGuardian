@@ -48,17 +48,17 @@ except ImportError:
     script_dir = Path(__file__).resolve().parent.parent
     sys.path.insert(0, str(script_dir))
 
-    from src.modules.battery import (
+    from batteryguardian.modules.battery import (
         check_battery_exists,
         check_battery_status,
     )
-    from src.modules.brightness import adjust_brightness
-    from src.modules.config import Config, load_config
-    from src.modules.log import get_logger, setup_logging
-    from src.modules.notification import (
+    from batteryguardian.modules.brightness import adjust_brightness
+    from batteryguardian.modules.config import Config, load_config
+    from batteryguardian.modules.log import get_logger, setup_logging
+    from batteryguardian.modules.notification import (
         notify_status_change,
     )
-    from src.modules.utils import (
+    from batteryguardian.modules.utils import (
         check_dependencies,
         check_lock,
         create_lock_file,
@@ -235,7 +235,7 @@ def _main_impl() -> None:
         try:
             from .modules.utils import check_monitoring_threads
         except ImportError:
-            from src.modules.utils import check_monitoring_threads
+            from batteryguardian.modules.utils import check_monitoring_threads
 
         if monitoring_started and monitoring_check_counter % 10 == 0:
             # Check every 10 iterations if our event threads are still alive

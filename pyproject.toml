@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "batteryguardian"
+version = "0.1.0"
+description = "Battery monitoring and management tool"
+authors = [{name = "Cyber-Syntax", email = "example@example.com"}]
+readme = "README.md"
+license = {text = "BSD 3-Clause License"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.6"
+dependencies = [
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+events = [
+    "pyudev>=0.22.0",
+    "dbus-python>=1.2.16",
+    "PyGObject>=3.38.0",
+]
+
+[project.scripts]
+battery-guardian = "batteryguardian.__main__:main"
