@@ -7,7 +7,7 @@ A comprehensive battery monitoring and management solution for Linux systems. Ba
 - **Battery Level Notifications**: Alerts for low, critical, and full battery levels
 - **Smart Brightness Control**: Automatically adjusts screen brightness based on battery level and charging status
 - **Multi-Environment Compatibility**: Works across different window managers (Hyprland, i3, Qtile, XFCE, etc.)
-- **Event-Based Monitoring**: Zero-latency reactions to power events using UPower, ACPI, or Linux kernel events
+- **Ultra-Fast Event Monitoring**: Instantaneous reactions to power events (like AC adapter changes) using optimized monitoring techniques
 - **Multiple Fallback Methods**: Uses various methods to detect battery status and control brightness
 - **Adaptive Polling**: Exponential back-off algorithm that minimizes CPU wakeups while staying responsive
 - **Customizable Thresholds**: Configure your own battery thresholds and brightness levels

@@ -1,0 +1,13 @@
+[Unit]
+Description=BatteryGuardian - Battery monitoring and management tool
+Documentation=https://github.com/Cyber-Syntax/BatteryGuardian
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env battery-guardian
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

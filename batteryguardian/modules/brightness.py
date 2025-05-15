@@ -39,6 +39,9 @@ def adjust_brightness(
     Returns:
         True if brightness was successfully adjusted, False otherwise
     """
+    import time
+    start_time = time.time()
+    
     if not config.get("brightness_control_enabled", True):
         logger.debug("Brightness control is disabled in configuration")
         return False
@@ -47,7 +50,17 @@ def adjust_brightness(
     target_brightness = get_target_brightness(battery_percent, ac_status, config)
 
     # Apply the brightness level
-    return set_brightness(target_brightness)
+    result = set_brightness(target_brightness)
+    
+    # Log response time for AC status change
+    elapsed_ms = (time.time() - start_time) * 1000
+    state = config.get('state', {})
+    prev_ac_status = state.get('previous_ac_status')
+    if prev_ac_status and prev_ac_status != ac_status:
+        logger.info("AC status changed from %s to %s - brightness adjusted in %.2f ms", 
+                   prev_ac_status, ac_status, elapsed_ms)
+    
+    return result
 
 
 def get_target_brightness(
