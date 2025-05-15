@@ -404,16 +404,16 @@ def start_monitoring(config: Dict[str, Any], state: Dict[str, Any]) -> bool:
     # First try fast power monitor for immediate AC adapter status changes
     try:
         from .fast_power_monitor import setup_fast_ac_monitoring
-        
+
         # Try to set up the ultra-responsive AC adapter monitoring
         if setup_fast_ac_monitoring(process_battery_event, state):
             logger.info("Successfully started ultra-responsive power monitoring")
-            
+
             # Create a marker thread
             def keep_alive():
                 while True:
                     time.sleep(5)  # Shorter interval for responsiveness
-                    
+
             marker_thread = threading.Thread(
                 target=keep_alive, daemon=True, name="FastPowerMonitorMarker"
             )
@@ -425,7 +425,7 @@ def start_monitoring(config: Dict[str, Any], state: Dict[str, Any]) -> bool:
         # Continue with standard UPower monitoring
     except Exception as e:
         logger.warning("Failed to start fast power monitoring: %s", str(e))
-        
+
     # Then try UPower/dbus method (reliable and widely available)
     try:
         from .upower import initialize_upower_monitoring
@@ -436,7 +436,9 @@ def start_monitoring(config: Dict[str, Any], state: Dict[str, Any]) -> bool:
             # Create a long-running marker thread to keep monitoring active
             def keep_alive():
                 while True:
-                    time.sleep(10)  # Keep thread alive with shorter interval for better responsiveness
+                    time.sleep(
+                        10
+                    )  # Keep thread alive with shorter interval for better responsiveness
 
             marker_thread = threading.Thread(
                 target=keep_alive, daemon=True, name="UPowerMonitorMarker"
