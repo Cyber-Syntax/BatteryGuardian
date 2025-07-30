@@ -6,10 +6,16 @@ BatteryGuardian - Battery monitoring and management tool.
 Notification functions module.
 Author: Cyber-Syntax
 License: BSD 3-Clause License
+
+This module provides desktop notifications with performance optimizations:
+1. Asynchronous notification dispatch using thread pool
+2. Notification throttling to prevent alert flooding
+3. Timeouts on subprocess calls to prevent hanging
 """
 
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional
 
 from .log import get_logger
@@ -20,12 +26,24 @@ logger = get_logger(__name__)
 # Global throttling variables
 LAST_NOTIFICATION: Dict[str, float] = {}
 
+# Thread pool for async notifications
+# Use a small pool size to avoid creating too many threads
+_NOTIFICATION_EXECUTOR = ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="NotifyWorker"
+)
 
-def send_notification(
+# Maximum time to wait for a notification command in seconds
+NOTIFICATION_TIMEOUT: int = 2
+
+
+def _send_notification_sync(
     title: str, message: str, urgency: str = "normal", icon: Optional[str] = None
 ) -> bool:
     """
-    Send a desktop notification using notify-send.
+    Send a desktop notification synchronously using notify-send.
+
+    This is an internal implementation function that runs the actual subprocess.
+    Use send_notification() instead for async notifications.
 
     Args:
         title: Notification title
@@ -49,12 +67,48 @@ def send_notification(
     cmd.extend([title, message])
 
     try:
-        subprocess.run(cmd, check=True)
+        # Add timeout to prevent hanging
+        subprocess.run(cmd, check=True, timeout=NOTIFICATION_TIMEOUT)
         logger.debug(f"Sent notification: {title}")
         return True
+    except subprocess.TimeoutExpired:
+        logger.error(
+            f"Notification timed out after {NOTIFICATION_TIMEOUT} seconds: {title}"
+        )
+        return False
     except (subprocess.SubprocessError, FileNotFoundError) as e:
         logger.error(f"Failed to send notification: {e}")
         return False
+
+
+def send_notification(
+    title: str, message: str, urgency: str = "normal", icon: Optional[str] = None
+) -> bool:
+    """
+    Send a desktop notification asynchronously using notify-send.
+
+    This function returns immediately and processes the notification in a background
+    thread pool to avoid blocking the main application.
+
+    Args:
+        title: Notification title
+        message: Notification message body
+        urgency: Notification urgency ("low", "normal", "critical")
+        icon: Icon name or path to image
+
+    Returns:
+        True if notification dispatch was initiated successfully
+    """
+    # Submit the notification to the thread pool
+    try:
+        _NOTIFICATION_EXECUTOR.submit(
+            _send_notification_sync, title, message, urgency, icon
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Failed to queue notification: {e}")
+        # Fall back to synchronous notification if thread pool fails
+        return _send_notification_sync(title, message, urgency, icon)
 
 
 def should_throttle(notification_type: str, config: Dict[str, Any]) -> bool:

@@ -6,9 +6,16 @@ BatteryGuardian - Battery monitoring and management tool.
 Battery functions module.
 Author: Cyber-Syntax
 License: BSD 3-Clause License
+
+This module implements battery status monitoring with performance optimizations:
+1. Path caching - stores paths to battery and AC adapter to avoid scanning
+2. Value caching - uses LRU cache to avoid frequent filesystem access
+3. TTL-based cache invalidation - refreshes cache after CACHE_TTL seconds
 """
 
 import glob
+import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -23,6 +30,12 @@ BATTERY_PATH: Optional[str] = None
 
 # Global cache for AC adapter path
 AC_ADAPTER_PATH: Optional[str] = None
+
+# Cache timestamp tracking
+_LAST_CACHE_RESET: float = time.time()
+
+# Cache time-to-live in seconds
+CACHE_TTL: int = 5  # 5 seconds cache lifetime
 
 # Flag to track if UPower is available
 UPOWER_AVAILABLE = check_upower_availability()
@@ -66,13 +79,16 @@ def check_battery_exists() -> bool:
     return False
 
 
-def check_battery_status() -> Tuple[int, str]:
+@lru_cache(maxsize=1)
+def _cached_battery_status() -> Tuple[int, str]:
     """
-    Get current battery percentage and AC status.
+    Get battery status with caching.
+
+    This function is decorated with lru_cache to avoid frequent file system access.
+    The cache is cleared periodically based on CACHE_TTL.
 
     Returns:
         Tuple of (battery_percentage, ac_status)
-        where ac_status is one of "Connected", "Disconnected", "Unknown"
     """
     # Try UPower first if available
     if UPOWER_AVAILABLE:
@@ -84,13 +100,44 @@ def check_battery_status() -> Tuple[int, str]:
         except Exception as e:
             logger.warning(f"Failed to get battery status from UPower: {e}")
 
-    # Fall back to sysfs methods
-    percent = get_battery_percentage()
-    ac_status = get_ac_status()
+    # Fall back to optimized file descriptor-based monitoring
+    try:
+        from .battery_monitor import get_battery_status
+
+        return get_battery_status()
+    except ImportError:
+        # Fall back to legacy methods if monitor module isn't available
+        percent = get_battery_percentage()
+        ac_status = get_ac_status()
 
     return percent, ac_status
 
 
+def check_battery_status() -> Tuple[int, str]:
+    """
+    Get current battery percentage and AC status.
+
+    This function uses caching to avoid frequent filesystem access and improve
+    performance. The cache is refreshed after CACHE_TTL seconds.
+
+    Returns:
+        Tuple of (battery_percentage, ac_status)
+        where ac_status is one of "Connected", "Disconnected", "Unknown"
+    """
+    global _LAST_CACHE_RESET
+
+    # Check if we need to invalidate the cache
+    current_time = time.time()
+    if current_time - _LAST_CACHE_RESET > CACHE_TTL:
+        _cached_battery_status.cache_clear()
+        _LAST_CACHE_RESET = current_time
+        logger.debug("Battery status cache cleared")
+
+    # Get cached status
+    return _cached_battery_status()
+
+
+@lru_cache(maxsize=1)
 def get_battery_percentage() -> int:
     """
     Get current battery percentage.
@@ -145,6 +192,7 @@ def get_battery_percentage() -> int:
     return 0
 
 
+@lru_cache(maxsize=1)
 def get_ac_status() -> str:
     """
     Check if AC power is connected using direct sysfs access.
