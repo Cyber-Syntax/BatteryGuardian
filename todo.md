@@ -1,0 +1,10 @@
+- [ ]  #8 🚀 feat: migrate python 3.12
+- [ ]  #9 🚀 feat: make python package
+- [ ]  #4 Optimize for performance (timeouts)
+- [ ]  #5 Brightness AC bug
+- [ ]  #7 Notify battery status
+- [ ]  #2 Keep brightness when user set manually
+- [ ]  #3 More power save enhancements
+- [ ]  refactor code structure
+- [ ]  wrong paths on test modules which include username
+- [ ]  learn from auto-cpufreq for config etc.

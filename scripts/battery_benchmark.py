@@ -29,7 +29,7 @@ def run_test(
 
         _cached_battery_status.cache_clear()
 
-    times: List[float] = []
+    times: list[float] = []
     for i in range(runs):
         # Clear cache before each run to ensure fair testing
         if name == "Standard implementation":
